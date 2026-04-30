@@ -36,7 +36,6 @@ Caching – In‑memory cache stores the latest data, bot scores, and sentiment 
 
 
 Please see my code below:
-
 import time
 import random
 import os
@@ -62,6 +61,7 @@ TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 cp_client = Client()
 
 COINGECKO_IDS = {
+    "bitcoin": "bitcoin",      # added
     "ethereum": "ethereum",
     "kaspa": "kaspa"
 }
@@ -123,7 +123,7 @@ def fetch_blockchain():
         print(f"Kaspa API error: {e}")
     return result
 
-def fetch_market_data(coin_ids=["eth-ethereum", "kas-kaspa"]):
+def fetch_market_data(coin_ids=["btc-bitcoin", "eth-ethereum", "kas-kaspa"]):   # added btc-bitcoin
     market_data = {}
     alerts = []
     for coin_id in coin_ids:
@@ -329,7 +329,7 @@ async def refresh_data():
         print("No TWITTER_BEARER_TOKEN found – skipping X data")
 
     manipulation_alerts = []
-    for coin_name in ["ethereum", "kaspa"]:
+    for coin_name in ["bitcoin", "ethereum", "kaspa"]:   # added "bitcoin"
         flag, reason = detect_manipulation(coin_name, reddit_posts)
         if flag:
             manipulation_alerts.append(f"🚨 **Potential manipulation detected for {coin_name.upper()}** – {reason}")
@@ -361,6 +361,9 @@ async def websocket_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
+
+
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -368,12 +371,13 @@ import pandas as pd
 st.set_page_config(page_title="Crypto Market Monitor", layout="wide")
 st.title("📡 Crypto Market Manipulation Monitor")
 
+# Sidebar with refresh button
 with st.sidebar:
     st.header("Controls")
     if st.button("🔄 Refresh Data (may take 1-3 min on first run)"):
         with st.spinner("Fetching fresh blockchain, Reddit, and market data..."):
             try:
-                resp = requests.post("http://localhost:8000/refresh", timeout=600)
+                resp = requests.post("http://localhost:8000/refresh", timeout=900)
                 if resp.status_code == 200:
                     st.success("Data refreshed!")
                 else:
@@ -381,9 +385,11 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
+# Load latest cached data
 try:
     data = requests.get("http://localhost:8000/latest").json()
 
+    # ----- Market Manipulation Alerts (new combined detection) -----
     manip_alerts = data.get("manipulation_alerts")
     if manip_alerts:
         st.error("⚠️ **Market Manipulation Detected!**")
@@ -392,11 +398,13 @@ try:
     else:
         st.success("✅ No market manipulation detected based on current data.")
 
+    # ----- Simple volume‑based alerts (old) – optional, keep for transparency -----
     if data.get("market_alerts"):
         with st.expander("🔍 Volume‑only alerts (for reference)"):
             for alert in data["market_alerts"]:
                 st.info(alert)
 
+    # ----- Blockchain metrics -----
     blockchain = data.get("blockchain")
     if blockchain:
         st.subheader("⛓️ Blockchain Metrics")
@@ -410,6 +418,7 @@ try:
     else:
         st.warning("Blockchain data not available (RPC may be down).")
 
+    # ----- Reddit posts -----
     reddit_posts = data.get("reddit_posts")
     if reddit_posts:
         st.subheader("💬 Reddit Sentiment (CryptoBERT + Bot scoring)")
@@ -421,12 +430,14 @@ try:
     else:
         st.info("No Reddit posts fetched (scraper may have failed).")
 
+    # ----- Tweets -----
     tweets = data.get("tweets")
     if tweets:
         st.subheader("🐦 Twitter Sentiment")
         df_tweets = pd.DataFrame(tweets)
         st.dataframe(df_tweets[["text", "sentiment_compound", "coin"]])
 
+    # ----- Market data (CoinPaprika) -----
     market = data.get("market")
     if market:
         st.subheader("📊 Market Data")
@@ -445,6 +456,7 @@ try:
                 st.markdown(f"- Volume Spike: {spike_display}")
                 st.markdown("")
 
+    # Last refresh timestamp
     last_refresh = data.get("last_refresh")
     if last_refresh:
         st.caption(f"Last data refresh: {last_refresh}")
