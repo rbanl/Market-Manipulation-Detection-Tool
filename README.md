@@ -115,7 +115,7 @@ def fetch_blockchain():
         print(f"Kaspa API error: {e}")
     return result
 
-def fetch_market_data(coin_ids=["eth-ethereum", "kaspa"]):
+def fetch_market_data(coin_ids=["eth-ethereum", "kas-kaspa"]):
     market_data = {}
     alerts = []
     for coin_id in coin_ids:
