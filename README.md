@@ -35,7 +35,10 @@ Market data – CoinPaprika API (price, 24h volume).
 Caching – In‑memory cache stores the latest data, bot scores, and sentiment results so subsequent refreshes are fast (first refresh takes ~2‑3 minutes due to heavy bot‑scraping).
 
 
-Please see code below:
+Please see my code below:
+
+import time
+import random
 import os
 from dotenv import load_dotenv
 load_dotenv("k.env")
@@ -54,9 +57,14 @@ from twitter_sentiment import run_twitter_pipeline
 ETH_RPC_URL = os.getenv("ETH_RPC")
 if not ETH_RPC_URL:
     raise ValueError("ETH_RPC not set in .env file")
-
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+
 cp_client = Client()
+
+COINGECKO_IDS = {
+    "ethereum": "ethereum",
+    "kaspa": "kaspa"
+}
 
 class CryptoBERTSentimentAnalyzer:
     def __init__(self, model_name="ElKulako/cryptobert"):
@@ -87,6 +95,7 @@ cached_data = {
     "tweets": [],
     "market": {},
     "market_alerts": [],
+    "manipulation_alerts": [],
     "last_refresh": None
 }
 
@@ -106,7 +115,6 @@ def fetch_blockchain():
         result["ethereum"]["gas_price_gwei"] = float(eth_gas)
     except Exception as e:
         print(f"Ethereum RPC error: {e}")
-
     try:
         kas_response = requests.get(kaspa_api, timeout=5).json()
         result["kaspa"]["block_count"] = kas_response['blockCount']
@@ -141,16 +149,95 @@ def fetch_market_data(coin_ids=["eth-ethereum", "kas-kaspa"]):
             market_data[coin_id] = None
     return market_data, alerts
 
+def get_historical_data(coin_name, hours=24):
+    gecko_id = COINGECKO_IDS.get(coin_name)
+    if not gecko_id:
+        return None, None
+    url = f"https://api.coingecko.com/api/v3/coins/{gecko_id}/market_chart"
+    params = {
+        "vs_currency": "usd",
+        "days": 1,
+        "interval": "hourly"
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        if resp.status_code != 200:
+            print(f"CoinGecko error for {coin_name}: {resp.status_code}")
+            return None, None
+        data = resp.json()
+        prices = data.get("prices", [])
+        volumes = data.get("total_volumes", [])
+        if len(prices) < 2 or len(volumes) < 2:
+            return None, None
+        if len(prices) > hours:
+            prices = prices[-hours:]
+            volumes = volumes[-hours:]
+        return prices, volumes
+    except Exception as e:
+        print(f"CoinGecko fetch failed for {coin_name}: {e}")
+        return None, None
+
+def detect_manipulation(coin_name, reddit_posts, hours_window=6):
+    prices, volumes = get_historical_data(coin_name)
+    if not prices or not volumes:
+        return False, "Insufficient historical data from CoinGecko"
+
+    current_price = prices[-1][1]
+    current_volume = volumes[-1][1]
+    if len(volumes) < 7:
+        return False, "Not enough volume history (<7 hours)"
+    prev_volumes = [v[1] for v in volumes[-7:-1]]
+    avg_volume = sum(prev_volumes) / len(prev_volumes)
+    volume_spike = current_volume > avg_volume * 2.0
+
+    price_24h_ago = prices[0][1]
+    price_change_pct = abs((current_price - price_24h_ago) / price_24h_ago * 100)
+    price_stable = price_change_pct < 1.0
+
+    if not reddit_posts:
+        return False, "No Reddit data"
+    now = datetime.now().timestamp()
+    cutoff = now - hours_window * 3600
+    recent_posts = [p for p in reddit_posts if p.get("created_utc", 0) > cutoff]
+    if len(recent_posts) < 3:
+        return False, f"Insufficient Reddit posts in last {hours_window}h (got {len(recent_posts)})"
+
+    all_sentiments = [p["sentiment_compound"] for p in recent_posts]
+    human_sentiments = [p["sentiment_compound"] for p in recent_posts if p.get("bot_score", 0.5) < 0.3]
+    if not human_sentiments:
+        return False, "No human-only posts in recent window"
+    raw_avg = sum(all_sentiments) / len(all_sentiments)
+    human_avg = sum(human_sentiments) / len(human_sentiments)
+    divergence = abs(raw_avg - human_avg)
+
+    if volume_spike and price_stable and divergence > 0.2:
+        reason = (f"Volume spike ({current_volume:.0f} vs avg {avg_volume:.0f}), price stable ({price_change_pct:.1f}%), "
+                  f"sentiment divergence {divergence:.2f} (raw={raw_avg:.2f}, human={human_avg:.2f})")
+        return True, reason
+    return False, f"Conditions not met: spike={volume_spike}, stable={price_stable}, divergence={divergence:.2f}"
+
 def scrape_reddit_posts(subreddit_name="CryptoCurrency", limit=20):
     url = f"https://old.reddit.com/r/{subreddit_name}/new/"
+    session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://old.reddit.com/"
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Referer": "https://old.reddit.com/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0"
     }
+    session.headers.update(headers)
+    time.sleep(random.uniform(0.5, 2.5))
     posts = []
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = session.get(url, timeout=15)
         if response.status_code != 200:
             print(f"Request failed: {response.status_code}")
             return []
@@ -165,16 +252,25 @@ def scrape_reddit_posts(subreddit_name="CryptoCurrency", limit=20):
                 continue
             title_tag = thing.find("a", class_="title")
             author_tag = thing.find("a", class_="author")
+            time_tag = thing.find("time")
+            created_utc = 0
+            if time_tag and time_tag.get("datetime"):
+                try:
+                    dt = datetime.fromisoformat(time_tag["datetime"].replace("Z", "+00:00"))
+                    created_utc = int(dt.timestamp())
+                except:
+                    created_utc = 0
             posts.append({
                 "id": fullname[3:],
                 "title": title_tag.text.strip() if title_tag else "",
                 "author": author_tag.text.strip() if author_tag else None,
                 "body": "",
-                "created_utc": 0
+                "created_utc": created_utc
             })
     except Exception as e:
         print(f"SCRAPER FAILED: {e}")
         return []
+    time.sleep(random.uniform(1, 2))
     return posts
 
 from reddit_bot_detector import get_reddit_bot_score
@@ -198,7 +294,7 @@ async def fetch_reddit_posts(limit=20):
                 except Exception as e:
                     print(f"Bot score error for {author}: {e}")
                     bot_cache[author] = 0.5
-                await asyncio.sleep(2)
+                await asyncio.sleep(1.5)
             bot_score = bot_cache[author]
         processed.append({
             'id': post['id'],
@@ -208,7 +304,8 @@ async def fetch_reddit_posts(limit=20):
             'sentiment_neg': sentiment['neg'],
             'sentiment_neu': sentiment['neu'],
             'sentiment_label': sentiment['label'],
-            'bot_score': bot_score
+            'bot_score': bot_score,
+            'created_utc': post['created_utc']
         })
     return processed
 
@@ -231,12 +328,21 @@ async def refresh_data():
     else:
         print("No TWITTER_BEARER_TOKEN found – skipping X data")
 
+    manipulation_alerts = []
+    for coin_name in ["ethereum", "kaspa"]:
+        flag, reason = detect_manipulation(coin_name, reddit_posts)
+        if flag:
+            manipulation_alerts.append(f"🚨 **Potential manipulation detected for {coin_name.upper()}** – {reason}")
+        else:
+            print(f"{coin_name}: {reason}")
+
     cached_data.update({
         "blockchain": blockchain,
         "reddit_posts": reddit_posts,
         "tweets": tweets,
         "market": market_data,
         "market_alerts": alerts,
+        "manipulation_alerts": manipulation_alerts,
         "last_refresh": datetime.now().isoformat()
     })
     print(f"Refresh completed – {len(reddit_posts)} Reddit posts, {len(tweets)} tweets")
@@ -255,8 +361,6 @@ async def websocket_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
-
-
 import streamlit as st
 import requests
 import pandas as pd
@@ -269,7 +373,7 @@ with st.sidebar:
     if st.button("🔄 Refresh Data (may take 1-3 min on first run)"):
         with st.spinner("Fetching fresh blockchain, Reddit, and market data..."):
             try:
-                resp = requests.post("http://localhost:8000/refresh", timeout=300)
+                resp = requests.post("http://localhost:8000/refresh", timeout=600)
                 if resp.status_code == 200:
                     st.success("Data refreshed!")
                 else:
@@ -280,10 +384,18 @@ with st.sidebar:
 try:
     data = requests.get("http://localhost:8000/latest").json()
 
-    if data.get("market_alerts"):
-        st.error("⚠️ **Potential Market Manipulation Detected!**")
-        for alert in data["market_alerts"]:
+    manip_alerts = data.get("manipulation_alerts")
+    if manip_alerts:
+        st.error("⚠️ **Market Manipulation Detected!**")
+        for alert in manip_alerts:
             st.warning(alert)
+    else:
+        st.success("✅ No market manipulation detected based on current data.")
+
+    if data.get("market_alerts"):
+        with st.expander("🔍 Volume‑only alerts (for reference)"):
+            for alert in data["market_alerts"]:
+                st.info(alert)
 
     blockchain = data.get("blockchain")
     if blockchain:
@@ -317,13 +429,21 @@ try:
 
     market = data.get("market")
     if market:
-        st.subheader("📊 Market Data (CoinPaprika)")
+        st.subheader("📊 Market Data")
         for coin, info in market.items():
             if info:
-                st.write(f"**{coin.upper()}**")
-                st.write(f"Price: ${info.get('price', 'N/A')} | "
-                         f"24h Volume: {info.get('volume_24h', 'N/A'):,.0f} | "
-                         f"Volume Spike: {info.get('volume_spike', False)}")
+                price = info.get('price', None)
+                price_display = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+                volume = info.get('volume_24h', 'N/A')
+                volume_display = f"{volume:,.0f}" if isinstance(volume, (int, float)) else volume
+                spike = info.get('volume_spike', False)
+                spike_display = "Present" if spike else "Not Present"
+
+                st.markdown(f"**{coin.upper()}**")
+                st.markdown(f"- Price: {price_display}")
+                st.markdown(f"- Market Trading 24h Volume ($): {volume_display}")
+                st.markdown(f"- Volume Spike: {spike_display}")
+                st.markdown("")
 
     last_refresh = data.get("last_refresh")
     if last_refresh:
