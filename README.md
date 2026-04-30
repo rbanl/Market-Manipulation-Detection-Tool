@@ -28,7 +28,7 @@ Bot scoring: headless browser (Playwright) scrapes each Reddit user’s profile 
 
 NLP – CryptoBERT (Hugging Face transformer) fine‑tuned on crypto social media. Runs on CPU or GPU (PyTorch).
 
-Blockchain – Ethereum (Web3.py) and Kaspa (REST API).
+Blockchain – Ethereum, Kaspa and Bitcoin.
 
 Market data – CoinPaprika API (price, 24h volume).
 
