@@ -2,7 +2,10 @@
 Built a market manipulation detection tool deployed as a web app with a user‑initiated refresh architecture.  
 It monitors cryptocurrency markets for potential manipulation by cross‑referencing on‑chain metrics, Reddit sentiment, and Twitter/X sentiment.  
 
-**What it watches**  
+NB: This is a working single‑user prototype. Data is refreshed on demand with a single button click – a deliberate choice that lets you check market conditions right before making a trade, while keeping resource usage low and respecting free API limits.
+
+
+**What it Detects**  
 - **On‑chain volume & price** – Daily on‑chain transaction volume (estimated for Ethereum and Bitcoin, exchange‑traded for Kaspa) is used to compute the NVT ratio. A volume spike with a stable price often signals artificial activity.  
 - **Reddit & Twitter sentiment** – Posts from r/CryptoCurrency and recent tweets are analyzed with CryptoBERT, a transformer model fine‑tuned on crypto social media. The system also detects bot accounts on Reddit by scraping user profiles (age, karma, posting patterns) and flags likely bots.  
 
