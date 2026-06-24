@@ -1,8 +1,4 @@
 # Market-Manipulation-Detection-Tool
-Here’s an updated project description that incorporates your latest additions—the tiered manipulation alerts, on‑chain metrics (NVT, amount moved, price), and reliability improvements. It reads as a cohesive overview suitable for a GitHub portfolio.
-
----
-
 Built a market manipulation detection tool deployed as a web app with a user‑initiated refresh architecture.  
 It monitors cryptocurrency markets for potential manipulation by cross‑referencing on‑chain metrics, Reddit sentiment, and Twitter/X sentiment.  
 
